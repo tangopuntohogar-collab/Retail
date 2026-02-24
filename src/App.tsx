@@ -3,48 +3,39 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { DashboardView } from './components/DashboardView';
 import { SalesTable } from './components/SalesTable';
-import { DetailSidebar } from './components/DetailSidebar';
-import { VentaRow, Filters, DetailFilters, DetailFilterOptions, DEFAULT_DETAIL_FILTERS } from './types';
+import { FilterSidebar } from './components/FilterSidebar';
+import { VentaRow, VentasFilters, DetailFilterOptions, getInitialFilters, DashboardMetrics } from './types';
 import {
   fetchVentas, fetchVentasAgregadas, fetchVentasAgregadasPrevio, PAGE_SIZE,
   fetchSucursales, fetchRubros, fetchDescCuentas, fetchTopClientes, fetchCuotas,
+  fetchFamilias, fetchCategorias, fetchTipos, fetchGeneros, fetchProveedores,
   DateRange,
 } from './lib/salesService';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
-const today = new Date();
-const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-const toISO = (d: Date) => d.toISOString().substring(0, 10);
-
-const DEFAULT_FILTERS: Filters = {
-  fechaDesde: toISO(firstOfMonth),
-  fechaHasta: toISO(today),
-  sucursales: [],
-  rubros: [],
-  modalidades: [],
-  search: '',
-};
-
 const EMPTY_DETAIL_OPTIONS: DetailFilterOptions = {
   sucursales: [], rubros: [], cuentas: [], clientes: [], cuotas: [],
+  familias: [], categorias: [], tipos: [], generos: [], proveedores: [],
 };
 
 export default function App() {
   const [activeView, setActiveView] = useState<'dashboard' | 'detail'>('dashboard');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // ── Global filters (dashboard + table) ────────────────────────────────────
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  // ── States independientes para Dashboard ──────────────────────────────────
+  const [dashFilters, setDashFilters] = useState<VentasFilters>(getInitialFilters());
+  const [dashOptions, setDashOptions] = useState<DetailFilterOptions>(EMPTY_DETAIL_OPTIONS);
+  const [isLoadingDashOptions, setIsLoadingDashOptions] = useState(true);
 
-  // ── Detail-only filters ───────────────────────────────────────────────────
-  const [detailFilters, setDetailFilters] = useState<DetailFilters>(DEFAULT_DETAIL_FILTERS);
+  // ── States independientes para Detalle ─────────────────────────────────────
+  const [detailFilters, setDetailFilters] = useState<VentasFilters>(getInitialFilters());
   const [detailOptions, setDetailOptions] = useState<DetailFilterOptions>(EMPTY_DETAIL_OPTIONS);
-  const [isLoadingOptions, setIsLoadingOptions] = useState(true);
+  const [isLoadingDetailOptions, setIsLoadingDetailOptions] = useState(true);
 
   // ── Data state ────────────────────────────────────────────────────────────
-  const [dashData, setDashData] = useState<VentaRow[]>([]);
-  const [dashPrevData, setDashPrevData] = useState<VentaRow[]>([]);
+  const [dashData, setDashData] = useState<DashboardMetrics | null>(null);
+  const [dashPrevData, setDashPrevData] = useState<DashboardMetrics | null>(null);
   const [tableData, setTableData] = useState<VentaRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
@@ -53,82 +44,81 @@ export default function App() {
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
-  // ── Load detail sidebar options (re-runs when date range changes) ─────────
-  useEffect(() => {
+  // ── Helper para cargar opciones de filtros ────────────────────────────────
+  const loadOptions = async (filters: VentasFilters, setOptions: (o: DetailFilterOptions) => void, setLoading: (b: boolean) => void) => {
     const range: DateRange = { fechaDesde: filters.fechaDesde, fechaHasta: filters.fechaHasta };
-    setIsLoadingOptions(true);
-    Promise.all([
-      fetchSucursales(range),
-      fetchRubros(range),
-      fetchDescCuentas(range),
-      fetchTopClientes(range),
-      fetchCuotas(range),
-    ])
-      .then(([suc, rub, cuentas, clientes, cuotas]) => {
-        setDetailOptions({ sucursales: suc, rubros: rub, cuentas, clientes, cuotas });
-      })
-      .catch(e => console.error('Error cargando opciones de detalle:', e))
-      .finally(() => setIsLoadingOptions(false));
-  }, [filters.fechaDesde, filters.fechaHasta]); // ← re-carga al cambiar fechas
+    setLoading(true);
+    try {
+      const [suc, rub, cuentas, clientes, cuotas, fam, cat, tip, gen, prov] = await Promise.all([
+        fetchSucursales(range), fetchRubros(range), fetchDescCuentas(range),
+        fetchTopClientes(range), fetchCuotas(range), fetchFamilias(range),
+        fetchCategorias(range), fetchTipos(range), fetchGeneros(range), fetchProveedores(range),
+      ]);
+      setOptions({
+        sucursales: suc, rubros: rub, cuentas, clientes, cuotas,
+        familias: fam, categorias: cat, tipos: tip, generos: gen, proveedores: prov,
+      });
+    } catch (e) {
+      console.error('Error cargando opciones:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadOptions(dashFilters, setDashOptions, setIsLoadingDashOptions); }, [dashFilters.fechaDesde, dashFilters.fechaHasta]);
+  useEffect(() => { loadOptions(detailFilters, setDetailOptions, setIsLoadingDetailOptions); }, [detailFilters.fechaDesde, detailFilters.fechaHasta]);
 
   // ── Load dashboard (aggregated) ───────────────────────────────────────────
-  const loadDashboard = useCallback(async (f: Filters) => {
+  const loadDashboardData = useCallback(async (f: VentasFilters) => {
+    console.log('[App] loadDashboardData - Calling with:', f);
     try {
       const [rows, prevRows] = await Promise.all([
         fetchVentasAgregadas(f),
         fetchVentasAgregadasPrevio(f),
       ]);
+      console.log(`[App] loadDashboardData - Received aggregated data:`, rows.kpis);
       setDashData(rows);
       setDashPrevData(prevRows);
+      setError(null);
     } catch (e: any) {
       console.error('Dashboard error:', e);
+      setError(e?.message ?? 'Error al cargar el tablero');
     }
   }, []);
 
-  // ── Load table (paginated, detail filters applied) ────────────────────────
-  const loadTable = useCallback(async (f: Filters, df: DetailFilters, page: number) => {
+  // ── Load table (paginated) ────────────────────────────────────────────────
+  const loadTableData = useCallback(async (f: VentasFilters, page: number) => {
+    console.log(`[App] loadTableData - Calling page ${page} with:`, f);
     try {
-      const { data, count } = await fetchVentas(f, df, page * PAGE_SIZE);
+      const { data, count } = await fetchVentas(f, page * PAGE_SIZE);
+      console.log(`[App] loadTableData - Received ${data.length} rows, total count: ${count}`);
       setTableData(data);
       setTotalCount(count);
+      setError(null);
     } catch (e: any) {
       console.error('Table error:', e);
+      setError(e?.message ?? 'Error al cargar el detalle');
     }
   }, []);
 
-  // ── React to global filter changes ────────────────────────────────────────
+  // ── React to filter changes ───────────────────────────────────────────────
   useEffect(() => {
-    let cancelled = false;
+    console.log('[App] useEffect dashFilters triggered:', dashFilters);
     setIsLoading(true);
-    setError(null);
-    setCurrentPage(0);
+    loadDashboardData(dashFilters).finally(() => setIsLoading(false));
+  }, [dashFilters]);
 
-    Promise.all([
-      loadDashboard(filters),
-      loadTable(filters, detailFilters, 0),
-    ])
-      .catch((e: any) => {
-        if (!cancelled) setError(e?.message ?? 'Error al conectar con Supabase');
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-
-    return () => { cancelled = true; };
-  }, [filters]); // global filters trigger full reload
-
-  // ── React to detail filter changes (only reloads table) ───────────────────
   useEffect(() => {
+    console.log('[App] useEffect detailFilters triggered:', detailFilters);
     setCurrentPage(0);
     setIsLoading(true);
-    loadTable(filters, detailFilters, 0)
-      .finally(() => setIsLoading(false));
-  }, [detailFilters]); // detail filters reload table only
+    loadTableData(detailFilters, 0).finally(() => setIsLoading(false));
+  }, [detailFilters]);
 
-  // ── Pagination ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (currentPage === 0) return;
     setIsLoading(true);
-    loadTable(filters, detailFilters, currentPage)
-      .finally(() => setIsLoading(false));
+    loadTableData(detailFilters, currentPage).finally(() => setIsLoading(false));
   }, [currentPage]);
 
   const handleViewChange = (view: 'dashboard' | 'detail') => {
@@ -150,8 +140,6 @@ export default function App() {
         onViewChange={handleViewChange}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-        filters={filters}
-        onFiltersChange={setFilters}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -180,7 +168,17 @@ export default function App() {
                 transition={{ duration: 0.2 }}
                 className="h-full"
               >
-                <DashboardView data={dashData} prevData={dashPrevData} filters={filters} isLoading={isLoading} />
+                <div className="h-full flex overflow-hidden">
+                  <FilterSidebar
+                    filters={dashFilters}
+                    onFiltersChange={setDashFilters}
+                    options={dashOptions}
+                    isLoadingOptions={isLoadingDashOptions}
+                  />
+                  <div className="flex-1 overflow-auto">
+                    <DashboardView data={dashData} prevData={dashPrevData} filters={dashFilters} isLoading={isLoading} />
+                  </div>
+                </div>
               </motion.div>
             )}
 
@@ -195,11 +193,11 @@ export default function App() {
                 className="h-full flex"
               >
                 {/* Filter sidebar dedicated to the detail view */}
-                <DetailSidebar
+                <FilterSidebar
                   filters={detailFilters}
                   onFiltersChange={setDetailFilters}
                   options={detailOptions}
-                  isLoadingOptions={isLoadingOptions}
+                  isLoadingOptions={isLoadingDetailOptions}
                 />
 
                 {/* Table + pagination */}

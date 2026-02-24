@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { DetailFilters, DetailFilterOptions, DEFAULT_DETAIL_FILTERS } from '../types';
 import {
     Search, ChevronDown, ChevronUp, X, SlidersHorizontal,
     Building2, Tag, CreditCard, Users, FilterX, Loader2,
-    FileSearch, CalendarDays, Hash,
+    FileSearch, CalendarDays, Hash, Layers, Box, FileText,
+    VenetianMask, Truck,
 } from 'lucide-react';
+import { VentasFilters, DetailFilterOptions, getInitialFilters } from '../types';
 
-interface DetailSidebarProps {
-    filters: DetailFilters;
-    onFiltersChange: (f: DetailFilters) => void;
+interface FilterSidebarProps {
+    filters: VentasFilters;
+    onFiltersChange: (f: VentasFilters) => void;
     options: DetailFilterOptions;
     isLoadingOptions: boolean;
 }
@@ -48,15 +49,13 @@ const Accordion: React.FC<AccordionProps> = ({
             >
                 <span className="flex items-center gap-2.5">
                     <span className="text-slate-400 group-hover:text-primary transition-colors">{icon}</span>
-                    {title}
-                    {isLoading
-                        ? <Loader2 size={12} className="animate-spin text-slate-500 ml-1" />
-                        : count != null && count > 0 && (
-                            <span className="size-4 flex items-center justify-center rounded-full bg-primary text-[10px] text-white font-bold">
-                                {count}
-                            </span>
-                        )
-                    }
+                    <span>
+                        {count != null && count > 0
+                            ? <>{title} <span className="text-primary font-semibold">({count})</span></>
+                            : title
+                        }
+                    </span>
+                    {isLoading && <Loader2 size={12} className="animate-spin text-slate-500 ml-1" />}
                 </span>
                 {open
                     ? <ChevronUp size={14} className="text-slate-500" />
@@ -152,8 +151,8 @@ const DateInput: React.FC<{
     </div>
 );
 
-/* ─── DetailSidebar ─────────────────────────────────────────────────────── */
-export const DetailSidebar: React.FC<DetailSidebarProps> = ({
+/* ─── FilterSidebar ──────────────────────────────────────────────────────── */
+export const FilterSidebar: React.FC<FilterSidebarProps> = ({
     filters, onFiltersChange, options, isLoadingOptions,
 }) => {
     const [collapsed, setCollapsed] = useState(false);
@@ -188,8 +187,8 @@ export const DetailSidebar: React.FC<DetailSidebarProps> = ({
         if (filters.comprobante === '' && comprobanteInput !== '') setComprobanteInput('');
     }, [filters.search, filters.comprobante]);
 
-    const toggle = (key: keyof Pick<DetailFilters, 'sucursales' | 'rubros' | 'cuentas' | 'clientes'>, val: string) => {
-        const current = filters[key];
+    const toggle = (key: keyof Pick<VentasFilters, 'sucursales' | 'rubros' | 'cuentas' | 'clientes' | 'familias' | 'categorias' | 'tipos' | 'generos' | 'proveedores'>, val: string) => {
+        const current = (filters[key] as string[]) || [];
         const next = current.includes(val) ? current.filter(v => v !== val) : [...current, val];
         onFiltersChange({ ...filters, [key]: next });
     };
@@ -201,18 +200,27 @@ export const DetailSidebar: React.FC<DetailSidebarProps> = ({
         onFiltersChange({ ...filters, cuotas: next });
     };
 
+    // Las fechas siempre están seteadas (getInitialFilters las inicializa), por eso
+    // solo contamos el rango de fechas cuando fue modificado respecto al default.
+    const { fechaDesde: defaultDesde, fechaHasta: defaultHasta } = getInitialFilters();
+    const datesModified =
+        filters.fechaDesde !== defaultDesde || filters.fechaHasta !== defaultHasta;
+
     const activeCount =
         filters.sucursales.length + filters.rubros.length +
         filters.cuentas.length + filters.clientes.length +
         filters.cuotas.length +
+        filters.familias.length + filters.categorias.length +
+        filters.tipos.length + filters.generos.length +
+        filters.proveedores.length +
         (filters.search ? 1 : 0) +
         (filters.comprobante ? 1 : 0) +
-        (filters.fechaDesde || filters.fechaHasta ? 1 : 0);
+        (datesModified ? 1 : 0);
 
     const handleClear = () => {
         setSearchInput('');
         setComprobanteInput('');
-        onFiltersChange(DEFAULT_DETAIL_FILTERS);
+        onFiltersChange(getInitialFilters());
     };
 
     // ── Collapsed ─────────────────────────────────────────────────────────────
@@ -384,6 +392,24 @@ export const DetailSidebar: React.FC<DetailSidebarProps> = ({
                     }
                 </Accordion>
 
+                {/* Familia */}
+                <Accordion
+                    title="Familia"
+                    icon={<Layers size={14} />}
+                    count={filters.familias.length}
+                    isLoading={isLoadingOptions}
+                >
+                    {options.familias.length === 0
+                        ? <span className="text-xs text-slate-500">Sin datos para el período</span>
+                        : <SearchableCheckList
+                            items={options.familias}
+                            selected={filters.familias}
+                            onToggle={v => toggle('familias', v)}
+                            placeholder="Buscar familia..."
+                        />
+                    }
+                </Accordion>
+
                 {/* Medio de Pago */}
                 <Accordion
                     title="Medio de Pago"
@@ -424,6 +450,78 @@ export const DetailSidebar: React.FC<DetailSidebarProps> = ({
                     }
                 </Accordion>
 
+                {/* Categoría */}
+                <Accordion
+                    title="Categoría"
+                    icon={<Box size={14} />}
+                    count={filters.categorias.length}
+                    isLoading={isLoadingOptions}
+                >
+                    {options.categorias.length === 0
+                        ? <span className="text-xs text-slate-500">Sin datos para el período</span>
+                        : <SearchableCheckList
+                            items={options.categorias}
+                            selected={filters.categorias}
+                            onToggle={v => toggle('categorias', v)}
+                            placeholder="Buscar categoría..."
+                        />
+                    }
+                </Accordion>
+
+                {/* Tipo */}
+                <Accordion
+                    title="Tipo"
+                    icon={<FileText size={14} />}
+                    count={filters.tipos.length}
+                    isLoading={isLoadingOptions}
+                >
+                    {options.tipos.length === 0
+                        ? <span className="text-xs text-slate-500">Sin datos para el período</span>
+                        : <SearchableCheckList
+                            items={options.tipos}
+                            selected={filters.tipos}
+                            onToggle={v => toggle('tipos', v)}
+                            placeholder="Buscar tipo..."
+                        />
+                    }
+                </Accordion>
+
+                {/* Género */}
+                <Accordion
+                    title="Género"
+                    icon={<VenetianMask size={14} />}
+                    count={filters.generos.length}
+                    isLoading={isLoadingOptions}
+                >
+                    {options.generos.length === 0
+                        ? <span className="text-xs text-slate-500">Sin datos para el período</span>
+                        : <SearchableCheckList
+                            items={options.generos}
+                            selected={filters.generos}
+                            onToggle={v => toggle('generos', v)}
+                            placeholder="Buscar género..."
+                        />
+                    }
+                </Accordion>
+
+                {/* Proveedor */}
+                <Accordion
+                    title="Proveedor"
+                    icon={<Truck size={14} />}
+                    count={filters.proveedores.length}
+                    isLoading={isLoadingOptions}
+                >
+                    {options.proveedores.length === 0
+                        ? <span className="text-xs text-slate-500">Sin datos para el período</span>
+                        : <SearchableCheckList
+                            items={options.proveedores}
+                            selected={filters.proveedores}
+                            onToggle={v => toggle('proveedores', v)}
+                            placeholder="Buscar proveedor..."
+                        />
+                    }
+                </Accordion>
+
                 {/* Cliente — con buscador interno */}
                 <Accordion
                     title="Cliente"
@@ -444,17 +542,19 @@ export const DetailSidebar: React.FC<DetailSidebarProps> = ({
             </div>
 
             {/* Limpiar */}
-            {activeCount > 0 && (
-                <div className="shrink-0 px-4 py-3 border-t border-slate-800">
-                    <button
-                        onClick={handleClear}
-                        className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50 transition-all text-xs font-medium"
-                    >
-                        <FilterX size={13} />
-                        Limpiar filtros ({activeCount})
-                    </button>
-                </div>
-            )}
-        </aside>
+            {
+                activeCount > 0 && (
+                    <div className="shrink-0 px-4 py-3 border-t border-slate-800">
+                        <button
+                            onClick={handleClear}
+                            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50 transition-all text-xs font-medium"
+                        >
+                            <FilterX size={13} />
+                            Limpiar filtros ({activeCount})
+                        </button>
+                    </div>
+                )
+            }
+        </aside >
     );
 };

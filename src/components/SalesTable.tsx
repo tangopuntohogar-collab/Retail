@@ -83,8 +83,8 @@ export const SalesTable: React.FC<SalesTableProps> = ({ data, isLoading }) => {
   const formatCuotas = (cuotas: number | null) =>
     !cuotas ? '-' : `${cuotas}c`;
 
-  // 17 columnas: Suc. | Tipo | Comprobante | Fecha | Cód.Art | Descripción | Cliente | Rubro | Medio de Pago | Cuotas | Cant. | Precio Neto | Precio Unit. | Total c/IVA | Costo Unit. | Costo Total | Rentab.
-  const COL_COUNT = 17;
+  // 22 columnas: Suc. | Tipo | Comprobante | Fecha | Familia | Cat. | Tipo Art. | Gen. | Prov | Cód.Art | Descripción | Cliente | Rubro | Medio de Pago | Cuotas | Cant. | Precio Neto | Precio Unit. | Total c/IVA | Costo Unit. | Costo Total | Rentab.
+  const COL_COUNT = 22;
 
   return (
     <div className="flex-1 overflow-auto relative w-full">
@@ -104,6 +104,12 @@ export const SalesTable: React.FC<SalesTableProps> = ({ data, isLoading }) => {
             <th className="px-4 py-3.5 w-[55px] whitespace-nowrap">Tipo</th>
             <th className="px-4 py-3.5 w-[145px] whitespace-nowrap">Comprobante</th>
             <th className="px-4 py-3.5 w-[90px] whitespace-nowrap">Fecha</th>
+            {/* Nuevos campos de clasificación */}
+            <th className="px-4 py-3.5 min-w-[100px] whitespace-nowrap">Familia</th>
+            <th className="px-4 py-3.5 min-w-[100px] whitespace-nowrap">Categoría</th>
+            <th className="px-4 py-3.5 min-w-[100px] whitespace-nowrap">Tipo Art.</th>
+            <th className="px-4 py-3.5 min-w-[100px] whitespace-nowrap">Género</th>
+            <th className="px-4 py-3.5 min-w-[120px] whitespace-nowrap">Proveedor</th>
             {/* Artículo — Info Adicional ahora dentro de Descripción */}
             <th className="px-4 py-3.5 w-[105px] whitespace-nowrap">Cód. Art.</th>
             <th className="px-4 py-3.5 min-w-[220px]">Descripción</th>
@@ -154,6 +160,31 @@ export const SalesTable: React.FC<SalesTableProps> = ({ data, isLoading }) => {
                 {/* Fecha */}
                 <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
                   {formatDate(item.fecha)}
+                </td>
+
+                {/* Familia */}
+                <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                  {item.familia ?? '-'}
+                </td>
+
+                {/* Categoría */}
+                <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                  {item.categoria ?? '-'}
+                </td>
+
+                {/* Tipo */}
+                <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                  {item.tipo ?? '-'}
+                </td>
+
+                {/* Género */}
+                <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                  {item.genero ?? '-'}
+                </td>
+
+                {/* Proveedor */}
+                <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                  {item.proveedor ?? '-'}
                 </td>
 
                 {/* Cód. Artículo */}
@@ -249,7 +280,7 @@ export const SalesTable: React.FC<SalesTableProps> = ({ data, isLoading }) => {
             <tr className="bg-[#0f172a] border-t-2 border-primary/60">
               {/* Columnas 1–12: etiqueta TOTAL GENERAL */}
               <td
-                colSpan={12}
+                colSpan={17}
                 className="px-4 py-3 text-right text-xs font-bold text-slate-300 tracking-widest uppercase whitespace-nowrap"
               >
                 Total General ({data.length} ítems)

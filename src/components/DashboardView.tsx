@@ -1,11 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { StatsCard } from './StatsCard';
-import { VentaRow, PaymentMix, RubroPoint } from '../types';
+import { VentaRow, PaymentMix, RubroPoint, DashboardMetrics } from '../types';
 import { MoreHorizontal, Loader2 } from 'lucide-react';
 
 interface DashboardViewProps {
-  data: VentaRow[];
-  prevData: VentaRow[];
+  data: DashboardMetrics | null;
+  prevData: DashboardMetrics | null;
   filters: import('../types').Filters;
   isLoading: boolean;
 }
@@ -18,28 +18,6 @@ const CATEGORIAS = [
   { key: 'CUENTA CORRIENTE', color: '#8b5cf6', label: 'Cuenta Corriente' }, // violeta
 ];
 
-
-/** Clasifica cada fila en una de las 4 categorías */
-const getCategoria = (r: VentaRow): string => {
-  const descCuenta = (r.desc_cuenta ?? '').toUpperCase();
-  const descCondVenta = (r.desc_cond_venta ?? '').toUpperCase();
-
-  // 1) Contado Efectivo: caja o banco
-  if (descCuenta.startsWith('CAJA') || descCuenta.startsWith('BANCO'))
-    return 'CONTADO EFECTIVO';
-
-  // 2) Crédito Financiera (antes que Tarjeta para no confundirlas)
-  if (descCondVenta === 'CREDITOS POR FINANCIERA')
-    return 'CRÉDITO FINANCIERA';
-
-  // 3) Tarjeta: tiene cuotas > 0
-  if ((r.cant_cuotas ?? 0) > 0)
-    return 'TARJETA';
-
-  // 4) Todo lo demás
-  return 'CUENTA CORRIENTE';
-};
-
 export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, filters, isLoading }) => {
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(v);
@@ -49,99 +27,73 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
   const fmtFull = (v: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 2 }).format(v);
 
-  /* ─── Deduplicación y Consolidación de Comprobantes ─── */
-  const consolidate = (rows: VentaRow[]) => {
-    const vouchersMap = new Map<string, { total: number; row: VentaRow }>();
-    rows.forEach(r => {
-      const key = `${r.nro_sucursal}-${r.t_comp}-${r.n_comp}`;
-      const existing = vouchersMap.get(key);
-      // imp_prop_c_iva es la fuente de verdad; fallback a importe_c_iva
-      const val = Number(r.imp_prop_c_iva ?? r.importe_c_iva ?? 0);
-      if (existing) {
-        existing.total += val;
-      } else {
-        vouchersMap.set(key, { total: val, row: r });
-      }
-    });
-    return Array.from(vouchersMap.values()).map(v => ({
-      ...v.row,
-      importe_c_iva: v.total // Normalizado: todos los memos downstream leen importe_c_iva
-    }));
-  };
-
-  const vouchers = useMemo(() => consolidate(data), [data]);
-  const prevVouchers = useMemo(() => consolidate(prevData), [prevData]);
-
   /* ─── KPIs (Stats) ────────────────────────────────── */
   const stats = useMemo(() => {
-    const totalFacturado = vouchers.reduce((acc, row) => acc + (row.importe_c_iva ?? 0), 0);
-    const margenTotal = vouchers.reduce((acc, row) => acc + (row.margen_contribucion ?? 0), 0);
-    const rentabilidad = totalFacturado > 0 ? (margenTotal / totalFacturado) * 100 : 0;
-    const ticketPromedio = vouchers.length > 0 ? totalFacturado / vouchers.length : 0;
-
+    if (!data) return { totalFacturado: 0, margenTotal: 0, rentabilidad: 0, ticketPromedio: 0 };
+    const { totalFacturado, margenTotal, rentabilidad, voucherCount } = data.kpis;
+    const ticketPromedio = voucherCount > 0 ? totalFacturado / voucherCount : 0;
     return { totalFacturado, margenTotal, rentabilidad, ticketPromedio };
-  }, [vouchers]);
+  }, [data]);
 
-  /* ─── Helper: agrupa rows en stacked por sucursal ─── */
-  const buildStackedData = (rows: VentaRow[]) => {
-    type CatData = { amount: number; breakdown: Map<string, number> };
-    const byBranch = new Map<string, Map<string, CatData>>();
-    rows.forEach(r => {
-      const suc = r.nro_sucursal ?? 'N/A';
-      const cat = getCategoria(r);
-      const imp = r.importe_c_iva ?? 0;
-      const medioOrig = String(r.cod_cond_venta) === '1'
-        ? (r.desc_cuenta ?? 'Contado')
-        : (r.desc_cond_venta ?? 'Otros');
-      if (!byBranch.has(suc)) byBranch.set(suc, new Map());
-      const inner = byBranch.get(suc)!;
-      if (!inner.has(cat)) inner.set(cat, { amount: 0, breakdown: new Map() });
-      const cd = inner.get(cat)!;
-      cd.amount += imp;
-      cd.breakdown.set(medioOrig, (cd.breakdown.get(medioOrig) ?? 0) + imp);
-    });
-    return new Map(
-      Array.from(byBranch.entries()).map(([suc, inner]) => {
-        const total = CATEGORIAS.reduce((s, c) => s + (inner.get(c.key)?.amount ?? 0), 0);
-        const segments = CATEGORIAS.map(c => {
-          const cd = inner.get(c.key);
-          return {
-            cat: c.key, label: c.label, color: c.color,
-            amount: cd?.amount ?? 0,
-            breakdown: cd ? Array.from(cd.breakdown.entries()).sort((a, b) => b[1] - a[1]) : [],
-          };
-        });
-        return [suc, { total, segments }] as const;
-      })
-    );
-  };
-
-  /* ─── Período actual y previo ───────────────────────── */
+  /* ─── Helper: transforma data de RPC a formato de gráfico ─── */
   const { stackedData, maxTotal } = useMemo(() => {
-    const currMap = buildStackedData(vouchers);
-    const prevMap = buildStackedData(prevVouchers);
+    if (!data) return { stackedData: [], maxTotal: 1 };
 
-    // Conjunto unión de sucursales (puede haber suc con datos solo en uno de los períodos)
+    // Agrupar por sucursal
+    const currMap = new Map<string, any>();
+    data.stacked_data.forEach(d => {
+      if (!currMap.has(d.nro_sucursal)) {
+        currMap.set(d.nro_sucursal, {
+          total: 0,
+          segments: CATEGORIAS.map(c => ({ ...c, amount: 0, breakdown: [] as [string, number][] }))
+        });
+      }
+      const branch = currMap.get(d.nro_sucursal)!;
+      branch.total += d.monto;
+      const segment = branch.segments.find((s: any) => s.key === d.categoria_negocio);
+      if (segment) {
+        segment.amount += d.monto;
+        segment.breakdown.push([d.medio_pago, d.monto]);
+      }
+    });
+
+    // Lo mismo para el período previo
+    const prevMap = new Map<string, any>();
+    if (prevData) {
+      prevData.stacked_data.forEach(d => {
+        if (!prevMap.has(d.nro_sucursal)) {
+          prevMap.set(d.nro_sucursal, {
+            total: 0,
+            segments: CATEGORIAS.map(c => ({ ...c, amount: 0, breakdown: [] as [string, number][] }))
+          });
+        }
+        const branch = prevMap.get(d.nro_sucursal)!;
+        branch.total += d.monto;
+        const segment = branch.segments.find((s: any) => s.key === d.categoria_negocio);
+        if (segment) {
+          segment.amount += d.monto;
+          segment.breakdown.push([d.medio_pago, d.monto]);
+        }
+      });
+    }
+
     const allSucs = Array.from(new Set([...currMap.keys(), ...prevMap.keys()]));
-
-    const stackedData = allSucs
+    const result = allSucs
       .map(suc => ({
         suc,
         name: `Suc. ${suc}`,
-        curr: currMap.get(suc) ?? { total: 0, segments: CATEGORIAS.map(c => ({ cat: c.key, label: c.label, color: c.color, amount: 0, breakdown: [] })) },
-        prev: prevMap.get(suc) ?? { total: 0, segments: CATEGORIAS.map(c => ({ cat: c.key, label: c.label, color: c.color, amount: 0, breakdown: [] })) },
+        curr: currMap.get(suc) ?? { total: 0, segments: CATEGORIAS.map(c => ({ ...c, amount: 0, breakdown: [] })) },
+        prev: prevMap.get(suc) ?? { total: 0, segments: CATEGORIAS.map(c => ({ ...c, amount: 0, breakdown: [] })) },
       }))
       .sort((a, b) => b.curr.total - a.curr.total);
 
     const maxTotal = Math.max(
-      ...stackedData.map(d => Math.max(d.curr.total, d.prev.total)),
+      ...result.map(d => Math.max(d.curr.total, d.prev.total)),
       1
     );
 
-    return { stackedData, maxTotal };
-  }, [vouchers, prevVouchers]);
-
-
+    return { stackedData: result, maxTotal };
+  }, [data, prevData]);
 
   /* ─── Etiquetas de período para la leyenda / tooltip ─── */
   const prevLabel = useMemo(() => {
@@ -161,11 +113,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
 
   /* ─── Mix de Pagos agrupado — 4 categorías fijas ─── */
   const paymentMix = useMemo(() => {
+    if (!data) return [];
     const totals = new Map<string, number>();
-    vouchers.forEach(r => {
-      const cat = getCategoria(r);
-      totals.set(cat, (totals.get(cat) ?? 0) + r.importe_c_iva);
+    data.stacked_data.forEach(d => {
+      totals.set(d.categoria_negocio, (totals.get(d.categoria_negocio) ?? 0) + d.monto);
     });
+
     const grand = Array.from(totals.values()).reduce((s, v) => s + v, 0) || 1;
     return CATEGORIAS.map(c => {
       const amt = totals.get(c.key) ?? 0;
@@ -174,26 +127,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
         label: c.label,
         color: c.color,
         amount: amt,
-        pct: grand > 0 ? Math.round((amt / grand) * 100) : 0,
+        pct: Math.round((amt / grand) * 100),
       };
     }).filter(c => c.amount > 0);
-  }, [vouchers]);
+  }, [data]);
 
   /* ─── Categoría seleccionada para filtrar el detalle ─── */
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
 
   /* ─── Mix Detallado — medios individuales sin agrupar ─── */
   const detailMix = useMemo(() => {
+    if (!data) return [];
     const map = new Map<string, { amount: number; cat: string }>();
-    vouchers.forEach(r => {
-      const cat = getCategoria(r);
-      if (selectedCat && cat !== selectedCat) return;
-      const medio = String(r.cod_cond_venta) === '1'
-        ? (r.desc_cuenta ?? 'Contado')
-        : (r.desc_cond_venta ?? 'Otros');
-      const prev = map.get(medio);
-      if (prev) prev.amount += r.importe_c_iva;
-      else map.set(medio, { amount: r.importe_c_iva, cat });
+    data.stacked_data.forEach(d => {
+      if (selectedCat && d.categoria_negocio !== selectedCat) return;
+      const prev = map.get(d.medio_pago);
+      if (prev) prev.amount += d.monto;
+      else map.set(d.medio_pago, { amount: d.monto, cat: d.categoria_negocio });
     });
 
     const allItems = Array.from(map.entries())
@@ -206,7 +156,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
 
     const grand = allItems.reduce((s, v) => s + v.amount, 0) || 1;
 
-    // Lógica Top 11 + OTROS
     if (allItems.length <= 11) {
       return allItems.map(item => ({
         ...item,
@@ -215,8 +164,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
     }
 
     const top11 = allItems.slice(0, 11);
-    const othersRaw = allItems.slice(11);
-    const othersAmount = othersRaw.reduce((s, v) => s + v.amount, 0);
+    const othersAmount = allItems.slice(11).reduce((s, v) => s + v.amount, 0);
 
     const result = top11.map(item => ({
       ...item,
@@ -226,7 +174,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
     result.push({
       label: 'OTROS',
       amount: othersAmount,
-      color: '#64748b', // Gris neutro (slate-500)
+      color: '#64748b',
       pct: Math.round((othersAmount / grand) * 100),
     });
 
@@ -236,80 +184,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ data, prevData, fi
   /* conic-gradient para el pie agrupado */
   const conicGradient = useMemo(() => {
     let acc = 0;
-    return paymentMix
-      .map(p => {
-        const start = acc;
-        acc += p.pct;
-        return `${p.color} ${start}% ${acc}%`;
-      })
-      .join(', ');
+    return paymentMix.map(p => {
+      const start = acc;
+      acc += p.pct;
+      return `${p.color} ${start}% ${acc}%`;
+    }).join(', ');
   }, [paymentMix]);
 
   /* conic-gradient para el pie de detalle */
   const detailConicGradient = useMemo(() => {
     let acc = 0;
-    return detailMix
-      .map(p => {
-        const start = acc;
-        acc += p.pct;
-        return `${p.color} ${start}% ${acc}%`;
-      })
-      .join(', ');
+    return detailMix.map(p => {
+      const start = acc;
+      acc += p.pct;
+      return `${p.color} ${start}% ${acc}%`;
+    }).join(', ');
   }, [detailMix]);
 
   /* ─── Top 5 Artículos ──────────────────────────────── */
   const topArticulos = useMemo(() => {
-    const map = new Map<string, { descripcio: string; total: number; cant: number; margen: number; cod_articu: string }>();
-    data.forEach(r => {
-      const key = r.cod_articu ?? '';
-      if (!key) return;
-      const importe = r.importe_c_iva ?? 0;
-      const cantidad = r.cantidad ?? 0;
-      const rentabilidad = r.porcentaje_rentabilidad ?? 0;
-      const prev = map.get(key);
-      if (prev) {
-        prev.total += importe;
-        prev.cant += cantidad;
-      } else {
-        map.set(key, {
-          descripcio: r.descripcio ?? '-',
-          total: importe,
-          cant: cantidad,
-          margen: rentabilidad,
-          cod_articu: key,
-        });
-      }
-    });
-    return Array.from(map.values()).sort((a, b) => b.total - a.total).slice(0, 5);
+    return data?.top_articles ?? [];
   }, [data]);
 
   /* ─── Dispersión Rentabilidad por Rubro ────────────── */
-  const rubroPoints: RubroPoint[] = useMemo(() => {
-    const map = new Map<string, { sumMargen: number; count: number; totalCant: number }>();
-    data.forEach(r => {
-      const key = r.rubro || 'Sin rubro';
-      const margen = r.porcentaje_rentabilidad ?? 0;
-      const cant = r.cantidad ?? 0;
-      const prev = map.get(key);
-      if (prev) {
-        prev.sumMargen += margen;
-        prev.count += 1;
-        prev.totalCant += cant;
-      } else {
-        map.set(key, { sumMargen: margen, count: 1, totalCant: cant });
-      }
-    });
-    return Array.from(map.entries()).map(([rubro, v]) => ({
-      rubro,
-      avgMargen: v.count > 0 ? v.sumMargen / v.count : 0,
-      totalCantidad: v.totalCant,
-    }));
+  const rubroPoints = useMemo(() => {
+    return data?.rubro_points ?? [];
   }, [data]);
 
-  // Normalise points — usa reduce para no reventar el stack con spread en arrays grandes
-  const maxCant = rubroPoints.reduce((m, p) => Math.max(m, p.totalCantidad ?? 0), 1);
-  const maxMargen = rubroPoints.reduce((m, p) => Math.max(m, p.avgMargen ?? 0), 1);
-  const minMargen = rubroPoints.reduce((m, p) => Math.min(m, p.avgMargen ?? 0), 0);
+  const maxCant = rubroPoints.reduce((m, p) => Math.max(m, p.total_cantidad ?? 0), 1);
+  const maxMargen = rubroPoints.reduce((m, p) => Math.max(m, p.avg_margen ?? 0), 1);
+  const minMargen = rubroPoints.reduce((m, p) => Math.min(m, p.avg_margen ?? 0), 0);
 
   /* ─── Spinner overlay ──────────────────────────────── */
   const Spinner = () => (
